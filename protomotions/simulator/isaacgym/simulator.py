@@ -1,3 +1,31 @@
+# Copyright (c) 2018-2022, NVIDIA Corporation
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 import sys
 from isaacgym import gymapi, gymtorch, gymutil  # type: ignore[misc]
 import torch
@@ -215,6 +243,9 @@ class IsaacGymSimulator(Simulator):
         self._contact_forces = contact_force_tensor.view(
             self.num_envs, bodies_per_env, 3
         )[..., : self._num_bodies, :]
+        
+        self.start_checking_for_reset = False
+        self.reset_occured = False
 
         if self.scene_lib is None or self.scene_lib.num_objects_per_scene == 0:
             self._object_contact_forces = None
@@ -228,6 +259,8 @@ class IsaacGymSimulator(Simulator):
 
         if visualization_markers:
             self._build_marker_state_tensors()
+        
+        self.cnt_reset = 0
 
     # ===== Group 2: Environment Setup & Configuration =====
     def _load_marker_asset(self) -> None:
@@ -274,8 +307,8 @@ class IsaacGymSimulator(Simulator):
             plane_params = gymapi.PlaneParams()
             plane_params.normal = gymapi.Vec3(0, 0, 1)
             plane_params.distance = 0
-            plane_params.static_friction = self.config.plane.static_friction
-            plane_params.dynamic_friction = self.config.plane.dynamic_friction
+            plane_params.static_friction = 1.0 #000.0 #self.config.plane.static_friction
+            plane_params.dynamic_friction = 1.0 #1000.0 #self.config.plane.dynamic_friction
             plane_params.restitution = self.config.plane.restitution
 
             # create the ground plane
@@ -738,7 +771,11 @@ class IsaacGymSimulator(Simulator):
         self._gym.refresh_dof_state_tensor(self._sim)
         self._gym.refresh_actor_root_state_tensor(self._sim)
         self._gym.refresh_rigid_body_state_tensor(self._sim)
-
+        
+        if self.start_checking_for_reset and len(self.reset_env_ids) > 0:
+            self.reset_occured = True
+        
+            
         if len(self.reset_env_ids) > 0:
             env_ids = self.reset_env_ids
             self._humanoid_root_states[env_ids, 0:3] = self._reset_states.root_pos[
@@ -852,6 +889,7 @@ class IsaacGymSimulator(Simulator):
         self, env_ids: Optional[torch.Tensor] = None
     ) -> RobotState:
         root_pos = self._humanoid_root_states[..., :3].clone()
+        
         root_rot = self._humanoid_root_states[..., 3:7].clone()
         root_vel = self._humanoid_root_states[..., 7:10].clone()
         root_ang_vel = self._humanoid_root_states[..., 10:13].clone()
@@ -910,6 +948,7 @@ class IsaacGymSimulator(Simulator):
             body_rot = body_rot[env_ids]
             body_vel = body_vel[env_ids]
             body_ang_vel = body_ang_vel[env_ids]
+       
         return RobotState(
             rigid_body_pos=body_pos,
             rigid_body_rot=body_rot,
@@ -982,6 +1021,7 @@ class IsaacGymSimulator(Simulator):
         self._gym.viewer_camera_look_at(self._viewer, None, cam_pos, cam_target)
 
     def render(self) -> None:
+        env_was_reset = 0
         if not self.headless:
             self._update_camera()
 
@@ -999,6 +1039,7 @@ class IsaacGymSimulator(Simulator):
                     self._push_robot()
                 elif evt.action == "toggle_video_record" and evt.value > 0:
                     self._toggle_video_record()
+                    self.start_checking_for_reset = True
                 elif evt.action == "cancel_video_record" and evt.value > 0:
                     self._cancel_video_record()
                 elif evt.action == "reset_envs" and evt.value > 0:
@@ -1014,7 +1055,15 @@ class IsaacGymSimulator(Simulator):
                 self._gym.draw_viewer(self._viewer, self._sim, True)
             else:
                 self._gym.poll_viewer_events(self._viewer)
-        super().render()
+            
+            self.cnt_reset += 1
+            if (self.reset_occured):
+                print(f"Reset cnt_reset with {self.cnt_reset}")
+                self.cnt_reset = 0
+                env_was_reset = 1
+                self.reset_occured = False
+                print("RESETING")
+        super().render(env_was_reset=env_was_reset)
 
     def _update_simulator_markers(self, markers_state: Optional[Dict[str, MarkerState]] = None) -> None:
         if markers_state is None:
@@ -1056,7 +1105,7 @@ class IsaacGymSimulator(Simulator):
 
     def _update_camera(self) -> None:
         self._gym.refresh_actor_root_state_tensor(self._sim)
-
+        
         if self._camera_target["element"] == 0:
             current_char_pos = (
                 self._get_simulator_root_state(self._camera_target["env"])

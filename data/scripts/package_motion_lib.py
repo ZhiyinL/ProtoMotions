@@ -9,6 +9,8 @@ import math
 from hydra.utils import get_class
 from hydra import compose, initialize
 
+import sys
+sys.path.append("/home/zhiyin/ProtoMotions/")
 from protomotions.utils.motion_lib import MotionLib
 from protomotions.simulator.base_simulator.config import RobotConfig
 

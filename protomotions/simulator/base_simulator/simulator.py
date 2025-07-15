@@ -1,3 +1,31 @@
+# Copyright (c) 2018-2022, NVIDIA Corporation
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 from abc import ABC, abstractmethod
 import os
 from collections import deque
@@ -11,7 +39,6 @@ from protomotions.envs.base_env.env_utils.terrains.terrain import Terrain
 from protomotions.envs.base_env.env_utils.humanoid_utils import build_pd_action_offset_scale
 from protomotions.simulator.base_simulator.robot_state import RobotState, DataConversion
 from protomotions.simulator.base_simulator.config import MarkerState, VisualizationMarker, ControlType, SimulatorConfig, SimBodyOrdering
-
 
 class Simulator(ABC):
     # -------------------------
@@ -73,6 +100,8 @@ class Simulator(ABC):
         self._user_recording_video_path = os.path.join(
             "output/renderings", f"{self.config.experiment_name}-%s"
         )
+
+        self.cnt = 0
 
     # -------------------------
     # 🌄 Group 2: Environment Setup & Configuration
@@ -217,7 +246,7 @@ class Simulator(ABC):
             markers_state (Dict[str, MarkerState]): Dictionary of marker states.
         """
         self.user_requested_reset = False
-        common_actions = torch.clamp(common_actions * self.robot_config.control.action_scale, -self.robot_config.control.clamp_actions, self.robot_config.control.clamp_actions)
+        common_actions = torch.clamp(common_actions, -self.robot_config.control.clamp_actions, self.robot_config.control.clamp_actions)
         self._common_actions = common_actions.to(self.device)
         self._physics_step()
         self._update_markers(markers_state)
@@ -586,6 +615,8 @@ class Simulator(ABC):
         Returns:
             torch.Tensor: Computed torques clipped to the torque limits.
         """
+        actions_scaled: torch.Tensor = action * self.robot_config.control.action_scale
+
         common_dof_state = self._get_simulator_dof_state().convert_to_common(self.data_conversion)
 
         if self.control_type == ControlType.PROPORTIONAL:
@@ -602,11 +633,11 @@ class Simulator(ABC):
         elif self.control_type == ControlType.VELOCITY:
             raise NotImplementedError("Velocity control is not properly implemented yet.")
             torques = (
-                    self._common_p_gains * (action - dof_state.dof_vel)
+                    self._common_p_gains * (actions_scaled - dof_state.dof_vel)
                     - self._common_d_gains * (dof_state.dof_vel - self.last_dof_vel) / self.dt
             )
         elif self.control_type == ControlType.TORQUE:
-            torques = action
+            torques = actions_scaled
         else:
             raise NameError(f"Unknown controller type: {self.control_type}")
         return torch.clip(torques, -self._torque_limits_common, self._torque_limits_common)
@@ -628,7 +659,7 @@ class Simulator(ABC):
             self._camera_target["env"] = (self._camera_target["env"] + 1) % self.num_envs
             print("Updated camera target to env", self._camera_target["env"])
 
-    def render(self):
+    def render(self, env_was_reset=None):
         """
         Render the current simulation state and handle video recording if enabled.
         
@@ -652,7 +683,7 @@ class Simulator(ABC):
                     )
                     self._user_recording_frame = 0
                     
-                    self._recorded_motion = {"global_translation": [], "global_rotation": []}
+                    self._recorded_motion = {"global_translation": [], "global_rotation": [], "is_done": []}
                     
                     if not os.path.exists(self._curr_user_recording_name):
                         os.makedirs(self._curr_user_recording_name)
@@ -691,8 +722,10 @@ class Simulator(ABC):
                     # Save the recorded motion to a file
                     global_translation = torch.cat(self._recorded_motion["global_translation"], dim=0)
                     global_rotation = torch.cat(self._recorded_motion["global_rotation"], dim=0)
+                    done_flags = torch.tensor( self._recorded_motion["is_done"])
+                    
                     with open(f"{self._curr_user_recording_name}.pt", "wb") as f:
-                        torch.save({"global_translation": global_translation, "global_rotation": global_rotation}, f)
+                        torch.save({"global_translation": global_translation, "global_rotation": global_rotation, "is_done": done_flags}, f)
                     self._recorded_motion = None
                     
                 self._user_recording_state_change = False
@@ -707,6 +740,15 @@ class Simulator(ABC):
                 self._user_recording_frame += 1
                 
                 bodies_state = self.get_bodies_state()
+                
+                is_done = env_was_reset
+                self._recorded_motion["is_done"].append(is_done)
+
+                self.cnt += 1
+                if is_done == True:
+                    print(f"Recording reset, counter was {self.cnt}")
+                    self.cnt = 0
+
                 self._recorded_motion["global_translation"].append(bodies_state.rigid_body_pos)
                 self._recorded_motion["global_rotation"].append(bodies_state.rigid_body_rot)
 

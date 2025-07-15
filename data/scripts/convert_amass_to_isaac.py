@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-import ipdb
+# import ipdb
 import yaml
 import numpy as np
 import torch
@@ -22,6 +22,9 @@ from smpl_sim.smpllib.smpl_joint_names import (
 from smpl_sim.smpllib.smpl_local_robot import SMPL_Robot
 from tqdm import tqdm
 
+import sys
+sys.path.append("/home/zhiyin/ProtoMotions/poselib")
+# from poselib.poselib.skeleton.skeleton3d import SkeletonMotion, SkeletonState, SkeletonTree
 from poselib.skeleton.skeleton3d import SkeletonMotion, SkeletonState, SkeletonTree
 import time
 from datetime import timedelta
@@ -39,11 +42,8 @@ def main(
     not_upright_start: bool = False,  # By default, let's start upright (for consistency across all models).
     humanoid_mjcf_path: Optional[str] = None,
     force_retarget: bool = False,
-    output_dir: Path = None,
+    samp_root_offset_path: str = "data/yaml_files/samp_root_offsets.yaml",
 ):
-    if output_dir is None:
-        output_dir = amass_root_dir
-
     if robot_type is None:
         robot_type = humanoid_type
     elif robot_type in ["h1", "g1"]:
@@ -82,6 +82,10 @@ def main(
     folder_names = [
         f.path.split("/")[-1] for f in os.scandir(amass_root_dir) if f.is_dir()
     ]
+    print(folder_names)
+    # # Load SAMP root offsets
+    # with open(samp_root_offset_path, "r") as f:
+    #     samp_root_offsets = yaml.safe_load(f)
 
     robot_cfg = {
         "mesh": False,
@@ -123,10 +127,11 @@ def main(
     total_files_to_process = 0
     processed_files = 0
     for folder_name in folder_names:
+        print(folder_name)
         if "retarget" in folder_name or "smpl" in folder_name or "h1" in folder_name:
             continue
         data_dir = amass_root_dir / folder_name
-        save_dir = output_dir / f"{folder_name}-{append_name}"
+        output_dir = amass_root_dir / f"{folder_name}-{append_name}"
 
         all_files_in_folder = [
             f
@@ -140,7 +145,7 @@ def main(
                 f
                 for f in all_files_in_folder
                 if not (
-                    save_dir
+                    output_dir
                     / f.relative_to(data_dir).parent
                     / f.name.replace(".npz", ".npy")
                     .replace(".pkl", ".npy")
@@ -166,10 +171,10 @@ def main(
             continue
 
         data_dir = amass_root_dir / folder_name
-        save_dir = amass_root_dir / f"{folder_name}-{append_name}"
+        output_dir = amass_root_dir / f"{folder_name}-{append_name}"
 
         print(f"Processing subset {folder_name}")
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
 
         files = [
             f
@@ -179,12 +184,13 @@ def main(
         print(f"Processing {len(files)} files")
 
         files.sort()
+        force_remake = True
 
         for filename in tqdm(files):
             try:
                 relative_path_dir = filename.relative_to(data_dir).parent
                 outpath = (
-                    save_dir
+                    output_dir
                     / relative_path_dir
                     / filename.name.replace(".npz", ".npy")
                     .replace(".pkl", ".npy")
@@ -200,16 +206,17 @@ def main(
                     continue
 
                 # Create the output directory if it doesn't exist
-                os.makedirs(save_dir / relative_path_dir, exist_ok=True)
+                os.makedirs(output_dir / relative_path_dir, exist_ok=True)
 
                 print(f"Processing {filename}")
-                if filename.suffix == ".npz":
+                if filename.suffix == ".npz" and "samp" not in str(filename):
                     motion_data = np.load(filename)
 
                     betas = motion_data["betas"]
                     gender = motion_data["gender"]
                     amass_pose = motion_data["poses"]
                     amass_trans = motion_data["trans"]
+                    
                     if humanoid_type == "smplx":
                         # Load the fps from the yaml file
                         fps_yaml_path = Path("data/yaml_files/motion_fps_amassx.yaml")
@@ -229,7 +236,6 @@ def main(
                                 .replace(")", "_")
                             )
                         )
-
                         if yaml_key in fps_dict:
                             mocap_fr = fps_dict[yaml_key]
                         elif "mocap_framerate" in motion_data:
@@ -243,6 +249,17 @@ def main(
                             mocap_fr = motion_data["mocap_framerate"]
                         else:
                             mocap_fr = motion_data["mocap_frame_rate"]
+                elif filename.suffix == ".pkl" and "samp" in str(filename):
+                    with open(filename, "rb") as f:
+                        motion_data = pickle.load(
+                            f, encoding="latin1"
+                        )  # np.load(filename)
+
+                    betas = motion_data["shape_est_betas"][:10]
+                    gender = "neutral"  # motion_data["gender"]
+                    amass_pose = motion_data["pose_est_fullposes"]
+                    amass_trans = motion_data["pose_est_trans"]
+                    mocap_fr = motion_data["mocap_framerate"]
                 else:
                     print(f"Skipping {filename} as it is not a valid file")
                     continue
@@ -268,6 +285,7 @@ def main(
                 batch_size = motion_data["pose_aa"].shape[0]
 
                 if humanoid_type == "smpl":
+                    print(motion_data["pose_aa"].shape)
                     pose_aa = np.concatenate(
                         [motion_data["pose_aa"][:, :66], np.zeros((batch_size, 6))],
                         axis=1,
@@ -318,7 +336,7 @@ def main(
                     skeleton_tree = SkeletonTree.from_mjcf(
                         f"{TMP_SMPL_DIR}/smpl_humanoid_{uuid_str}.xml"
                     )
-
+                
                 root_trans_offset = (
                     torch.from_numpy(motion_data["trans"])
                     + skeleton_tree.local_translation[0]
@@ -358,6 +376,11 @@ def main(
                         pose_quat_global[..., 0] *= -1
                         pose_quat_global[..., 2] *= -1
                         trans[..., 1] *= -1
+
+                    if "samp" in str(filename):
+                        samp_offset = torch.tensor(samp_root_offsets[filename.stem])
+                        trans[:, :2] -= trans[0, :2].clone()
+                        trans[:, :2] += samp_offset
 
                     new_sk_state = SkeletonState.from_rotation_and_root_translation(
                         skeleton_tree,

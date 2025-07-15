@@ -16,6 +16,10 @@ class MotionManager(BaseComponent):
             torch.ones(self.env.num_envs, dtype=torch.float, device=self.env.device)
             * self.config.motion_sampling.init_start_prob
         )
+
+        self._deck = list(range(self.env.motion_lib.num_motions()))
+        self._deck_ptr = len(self._deck) - 1  # pointer inits to the last motion to give time for recording
+        print(f"Deck initialized with {len(self._deck)} motions.")
         
         self.motion_weights = self.env.motion_lib.state.motion_weights.clone().to(device=self.env.device)
 
@@ -49,6 +53,32 @@ class MotionManager(BaseComponent):
             new_times = torch.zeros_like(
                 self.env.motion_lib.state.motion_lengths[new_motion_ids]
             )
+        elif getattr(self.config.motion_sampling, "use_deck_sampling", False):
+            print("Using deck sampling for motion sampling.")
+            picks = []
+            for _ in env_ids:
+                if self._deck_ptr >= len(self._deck):
+                    self._deck_ptr = 0
+                picks.append(self._deck[self._deck_ptr])
+                self._deck_ptr += 1
+
+            new_motion_ids = torch.tensor(picks, dtype=torch.long,
+                                          device=self.env.device)
+            new_times = self.env.motion_lib.sample_time(
+                new_motion_ids, truncate_time=self.env.dt
+            )
+
+            # apply your init‐start‐prob logic if desired
+            if self.config.motion_sampling.init_start_prob > 0:
+                init_start = torch.bernoulli(
+                    self.init_start_probs[: len(env_ids)])
+                new_times = torch.where(
+                    init_start == 1,
+                    torch.zeros_like(new_times),
+                    new_times,
+                )
+            print(f"Deck sampling: {new_motion_ids} with times {new_times}")
+
         else:
             if new_motion_ids is None:
                 new_motion_ids = torch.multinomial(self.motion_weights, num_samples=len(env_ids), replacement=True)

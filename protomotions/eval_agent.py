@@ -2,6 +2,11 @@ import os
 import sys
 from pathlib import Path
 
+this_file = os.path.abspath(__file__)
+proj_root = os.path.dirname(os.path.dirname(this_file))      # → ~/ProtoMotions
+isaac_root = os.path.join(proj_root, "isaac_utils")           # → ~/ProtoMotions/isaac_utils
+sys.path.insert(0, isaac_root)
+
 import hydra
 from hydra.utils import instantiate
 from omegaconf import OmegaConf

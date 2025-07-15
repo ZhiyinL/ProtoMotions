@@ -303,6 +303,7 @@ class SimulatorConfig(ConfigBuilder):
     camera: Optional[Any] = None
     record_viewer: bool = False
     viewer_record_dir: str = "output/recordings/viewer"
+    auto_record: bool = True
 
 
 @dataclass
