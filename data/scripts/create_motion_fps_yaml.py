@@ -25,7 +25,7 @@ def main(
     # store the full filename in a dictionary.
     # store the entry "motion_fps" in the dictionary.
     # save the dictionary to a yaml file.
-    cluster_dir_re = re.compile(r"^cluster\d{2}_0428p$")
+    cluster_dir_re = re.compile(r"^.*$") # re.compile(r"^cluster\d{2}_0428p$")
     # motion_fps_dict = {}
     motion_entries = []
     motion_idx = 0
