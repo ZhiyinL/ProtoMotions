@@ -1,7 +1,7 @@
 import torch
 
 from protomotions.envs.base_env.components.base_component import BaseComponent
-
+from pathlib import Path
 
 class MotionManager(BaseComponent):
     def __init__(self, config, env):
@@ -17,10 +17,23 @@ class MotionManager(BaseComponent):
             * self.config.motion_sampling.init_start_prob
         )
 
-        self._deck = list(range(self.env.motion_lib.num_motions()))
-        self._deck_ptr = len(self._deck) - 1  # pointer inits to the last motion to give time for recording
-        print(f"Deck initialized with {len(self._deck)} motions.")
-        
+        # build deck
+        full_deck = list(range(self.env.motion_lib.num_motions()))
+        fail_file = Path(config.root_dir) / env.config.experiment_name / f"failed_motions_0.txt"
+        print(f"Loading failed motions from {fail_file}")
+        if fail_file.exists():
+            with open(fail_file, "r") as f:
+                failed = [int(line.strip()) for line in f if line.strip()]
+        else:
+            failed = []
+        self._deck_success = [m for m in full_deck if m not in failed]
+        self._deck_failure = failed.copy()
+        self._deck = full_deck
+        print(self._deck_success, self._deck_failure, self._deck)
+
+        self._deck_ptr = 0
+        print(f"Deck sizes — all: {len(self._deck)}, success: {len(self._deck_success)}, failure: {len(self._deck_failure)}")
+
         self.motion_weights = self.env.motion_lib.state.motion_weights.clone().to(device=self.env.device)
 
     def reset_envs(self, env_ids):
@@ -54,12 +67,22 @@ class MotionManager(BaseComponent):
                 self.env.motion_lib.state.motion_lengths[new_motion_ids]
             )
         elif getattr(self.config.motion_sampling, "use_deck_sampling", False):
-            print("Using deck sampling for motion sampling.")
+            mode = getattr(self.config.motion_sampling, "deck_sampling_mode", "all")
+            assert mode in ["all", "success", "failure"], f"Invalid deck sampling mode: {mode}"
+            print("Using deck sampling for motion sampling.", mode)
+
+            if mode == "success":
+                deck = self._deck_success
+            elif mode == "failure":
+                deck = self._deck_failure
+            else:
+                deck = self._deck
+
             picks = []
             for _ in env_ids:
-                if self._deck_ptr >= len(self._deck):
+                if self._deck_ptr >= len(deck):
                     self._deck_ptr = 0
-                picks.append(self._deck[self._deck_ptr])
+                picks.append(deck[self._deck_ptr])
                 self._deck_ptr += 1
 
             new_motion_ids = torch.tensor(picks, dtype=torch.long,
