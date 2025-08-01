@@ -191,7 +191,7 @@ class Mimic(PPO):
             to_log[f"eval/{k}_min"] = metrics[f"{k}_min"].detach().mean().item()
 
         if "gt_err" in self.config.eval_metric_keys:
-            tracking_failures = (metrics["gt_err_max"] > 0.5).float()
+            tracking_failures = (metrics["gt_err_max"] > self.config.eval_gt_err_max).float()
             to_log["eval/tracking_success_rate"] = 1.0 - tracking_failures.detach().mean().item()
 
             failed_motions = torch.nonzero(tracking_failures).flatten().tolist()
@@ -199,8 +199,7 @@ class Mimic(PPO):
             with open(root_dir / f"failed_motions_{self.fabric.global_rank}.txt", "w") as f:
                 for motion_id in failed_motions:
                     f.write(f"{motion_id}\n")
-                    
-            new_weights = torch.ones(self.motion_lib.num_motions(), device=self.device) * 1e-4
+            new_weights = torch.ones(self.motion_lib.num_motions(), device=self.device) * self.config.eval_new_weights_scale
             new_weights[failed_motions] = 1.0
             self.env.motion_manager.update_sampling_weights(new_weights)
 

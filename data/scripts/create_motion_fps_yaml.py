@@ -13,6 +13,7 @@ def main(
     humanoid_type: str = "smpl",
     amass_fps_file: Optional[Path] = None,
     output_path: Optional[Path] = None,
+    name: str = "default",
 ):
     if humanoid_type == "smplx":
         assert (
@@ -25,7 +26,13 @@ def main(
     # store the full filename in a dictionary.
     # store the entry "motion_fps" in the dictionary.
     # save the dictionary to a yaml file.
-    cluster_dir_re = re.compile(r"^.*$") # re.compile(r"^cluster\d{2}_0428p$")
+
+    # r"^.*$") # re.compile(r"^cluster\d{2}_0428p$")
+    # r"^24seoulgpms_l32_yagodka_saron_red-(.*?)-right-(.*?)$"
+
+    target_regex = r"^24seoulgpms_l32_yagodka_saron_red-"r"(?:clip_(?:1|10))"r"-right-"r"(.*?)$"
+
+    cluster_dir_re = re.compile(target_regex)  
     # motion_fps_dict = {}
     motion_entries = []
     motion_idx = 0
@@ -118,7 +125,7 @@ def main(
     # wrap under a top-level `motions:` list
     motion_entries = sorted(motion_entries, key=lambda e: e["idx"])
     dataset = {"motions": motion_entries}
-    out_file = output_path / f"motion_fps_{humanoid_type}.yaml"
+    out_file = output_path / f"motion_fps_{humanoid_type}_{name}.yaml"
     with open(out_file, "w") as f:
        yaml.safe_dump(dataset, f, sort_keys=False)
     print(f"Wrote {len(motion_entries)} entries to {out_file}")
